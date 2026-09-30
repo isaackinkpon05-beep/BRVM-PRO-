@@ -21,7 +21,6 @@ const PRODUCTS = {
 };
 
 exports.handler = async (event) => {
-  // Autoriser uniquement les requêtes POST
   if (event.httpMethod !== "POST") {
     return {
       statusCode: 405,
@@ -35,12 +34,8 @@ exports.handler = async (event) => {
   }
 
   try {
-    // Lire les données envoyées par le site
     const body = JSON.parse(event.body || "{}");
-    const productId = body.product;
-
-    // Vérifier que le produit existe
-    const product = PRODUCTS[productId];
+    const product = PRODUCTS[body.product];
 
     if (!product) {
       return {
@@ -54,13 +49,12 @@ exports.handler = async (event) => {
       };
     }
 
-    // Récupérer les clés PayDunya depuis Netlify
     const masterKey = process.env.PAYDUNYA_MASTER_KEY;
     const privateKey = process.env.PAYDUNYA_PRIVATE_KEY;
     const token = process.env.PAYDUNYA_TOKEN;
 
     if (!masterKey || !privateKey || !token) {
-      console.error("Clés PayDunya manquantes.");
+      console.error("Une ou plusieurs clés PayDunya sont absentes.");
 
       return {
         statusCode: 500,
@@ -73,18 +67,14 @@ exports.handler = async (event) => {
       };
     }
 
-    // Adresse de ton site
-    const siteUrl =
-      process.env.SITE_URL ||
-      "https://classy-horse-acfa87.netlify.app";
-
-    // Endpoint PayDunya en MODE TEST
     const endpoint =
       "https://app.paydunya.com/sandbox-api/v1/checkout-invoice/create";
 
-    // Données envoyées à PayDunya
     const payload = {
       invoice: {
+        total_amount: product.price,
+        description: `Achat ${product.name}`,
+
         items: {
           item_0: {
             name: product.name,
@@ -93,40 +83,16 @@ exports.handler = async (event) => {
             total_price: product.price,
             description: "Ressource pédagogique BRVM PRO"
           }
-        },
-
-        total_amount: product.price,
-
-        description:
-          `Achat ${product.name}`
+        }
       },
 
       store: {
-        name: "BRVM PRO",
-        tagline: "Éducation financière et BRVM",
-        website_url: siteUrl
-      },
-
-      custom_data: {
-        product_id: productId,
-        product_name: product.name
-      },
-
-      actions: {
-        return_url:
-          `${siteUrl}/?payment=success&product=${productId}`,
-
-        cancel_url:
-          `${siteUrl}/?payment=cancelled&product=${productId}`,
-
-        callback_url:
-          `${siteUrl}/.netlify/functions/paydunya-ipn`
+        name: "BRVM PRO"
       }
     };
 
-    console.log("Création paiement PayDunya :", productId);
+    console.log("Envoi de la facture PayDunya :", body.product);
 
-    // Envoyer la demande à PayDunya
     const response = await fetch(endpoint, {
       method: "POST",
 
@@ -140,39 +106,33 @@ exports.handler = async (event) => {
       body: JSON.stringify(payload)
     });
 
-    // Lire la réponse PayDunya
     const data = await response.json();
 
     console.log(
-      "Réponse PayDunya :",
-      JSON.stringify({
-        response_code: data.response_code,
-        response_text: data.response_text,
-        description: data.description
-      })
+      "PayDunya response_code :",
+      data.response_code
     );
 
-    // Vérifier la réponse
-    if (!response.ok || data.response_code !== "00") {
-      console.error(
-        "Erreur PayDunya :",
-        data.response_text || "Erreur inconnue"
-      );
+    console.log(
+      "PayDunya response_text :",
+      data.response_text
+    );
 
+    if (data.response_code !== "00") {
       return {
         statusCode: 502,
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          error: "Impossible de créer le paiement.",
-          details:
-            data.response_text || "Erreur PayDunya"
+          success: false,
+          error:
+            data.response_text ||
+            "PayDunya a refusé la création de la facture."
         })
       };
     }
 
-    // Paiement créé avec succès
     return {
       statusCode: 200,
 
@@ -182,7 +142,7 @@ exports.handler = async (event) => {
 
       body: JSON.stringify({
         success: true,
-        product: productId,
+        product: body.product,
         price: product.price,
         token: data.token,
         url: data.response_text
@@ -190,10 +150,7 @@ exports.handler = async (event) => {
     };
 
   } catch (error) {
-    console.error(
-      "Erreur serveur :",
-      error.message
-    );
+    console.error("Erreur create-payment :", error);
 
     return {
       statusCode: 500,
@@ -203,6 +160,7 @@ exports.handler = async (event) => {
       },
 
       body: JSON.stringify({
+        success: false,
         error: "Erreur interne du serveur."
       })
     };
